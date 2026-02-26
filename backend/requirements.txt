@@ -1,0 +1,21 @@
+fastapi
+uvicorn[standard]==0.30.6
+websockets
+pydantic
+python-multipart
+
+# Google AI & ADK
+google-generativeai
+google-adk
+google-cloud-aiplatform
+vertexai
+
+# Google Cloud
+google-cloud-firestore
+google-cloud-storage
+google-cloud-pubsub
+
+# Utilities
+python-dotenv
+httpx
+Pillow
