@@ -5,11 +5,14 @@ Backend: FastAPI + Google ADK Multi-Agent Orchestrator
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
+os.environ["GOOGLE_API_KEY"] = os.environ.get("GEMINI_API_KEY", "")
+
 import asyncio
 import base64
 import json
 import logging
-import os
+
 from typing import AsyncGenerator
 
 
@@ -124,9 +127,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()
     logger.info(f"WebSocket connected: session {session_id}")
 
-    session = await session_manager.get_session(session_id)
+    # Wait up to 5 seconds for session to be created (race condition fix)
+    session = None
+    for _ in range(10):
+        session = await session_manager.get_session(session_id)
+        if session:
+            break
+    await asyncio.sleep(0.5)
+
     if not session:
-        await websocket.send_json({"type": "error", "message": "Session not found"})
         await websocket.close()
         return
 
@@ -176,7 +185,13 @@ async def actions_websocket(websocket: WebSocket, session_id: str):
     PRISM sends actions here; the frontend JS executes them in the browser.
     """
     await websocket.accept()
-    session = await session_manager.get_session(session_id)
+    session = None
+    for _ in range(10):
+        session = await session_manager.get_session(session_id)
+        if session:
+            break
+    await asyncio.sleep(0.5)
+
     if not session:
         await websocket.close()
         return
