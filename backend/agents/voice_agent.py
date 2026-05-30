@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, AsyncGenerator
 
 import google.generativeai as genai
 from google.genai import types as genai_types
+from groq import AsyncGroq
 
 if TYPE_CHECKING:
     from agents.orchestrator import PRISMOrchestrator
@@ -51,13 +52,12 @@ class VoiceAgent:
         self._client = None
 
     async def initialize(self):
-        """Set up Gemini Live API session."""
+        """Set up Groq client."""
         try:
-            self._client = genai.Client(api_key=GEMINI_API_KEY)
+            self._client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY", ""))
             logger.info("Voice agent initialized")
         except Exception as e:
             logger.error(f"Voice agent init error: {e}")
-
     async def cleanup(self):
         """Clean up resources."""
         if self.live_session:

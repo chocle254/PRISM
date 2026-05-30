@@ -149,7 +149,9 @@ class DesktopAgent:
         return {"success": True, "action": "move", "x": x, "y": y}
 
     def _open_url(self, url: str) -> dict:
-        """Navigate to a URL using the browser address bar."""
+        """Navigate to a URL in a new tab."""
+        pyautogui.hotkey("ctrl", "t")   # Open new tab
+        time.sleep(0.5)
         pyautogui.hotkey("ctrl", "l")   # Focus address bar
         time.sleep(0.3)
         pyautogui.hotkey("ctrl", "a")   # Select all existing text

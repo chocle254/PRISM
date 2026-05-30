@@ -7,8 +7,8 @@ import PRISMHeader from "./components/PRISMHeader";
 import { usePRISMSession, useWebSocket } from "./hooks";
 import "./App.css";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
-const WS_URL = process.env.REACT_APP_WS_URL || "ws://localhost:8000";
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8080";
+const WS_URL = process.env.REACT_APP_WS_URL || "ws://localhost:8080";
 
 export default function App() {
   const [sessionId, setSessionId] = useState(null);

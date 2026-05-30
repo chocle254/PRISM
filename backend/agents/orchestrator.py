@@ -8,10 +8,10 @@ Built on Google Agent Development Kit (ADK).
 import asyncio
 import os
 import logging
+import json
 
-from google.adk.agents import Agent
-from google.adk.runners import InMemoryRunner
 from fastapi import WebSocket
+from groq import AsyncGroq
 
 from agents.voice_agent import VoiceAgent
 from agents.vision_agent import VisionAgent
@@ -42,115 +42,71 @@ class PRISMOrchestrator:
         self._recently_sent: set = set()
 
         # ADK runner
-        self._adk_agent = self._build_adk_agent()
-        self._runner = InMemoryRunner(agent=self._adk_agent, app_name="PRISM")
+        self._groq = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
+        self._tools = self._build_tools()
+        self._conversation: list = []
 
         logger.info(f"PRISM Orchestrator initialized: {session_id}")
 
     # ── ADK Agent Definition ────────────────────────────────────────────────────
-    def _build_adk_agent(self) -> Agent:
-        import google.generativeai as genai
-        genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
+    # ── Groq Tools Definition ───────────────────────────────────────────────────
+    def _build_tools(self) -> list:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "analyze_screen",
+                    "description": "Analyze the current screen and extract actionable information.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "description": {"type": "string", "description": "What to look for on screen"}
+                        },
+                        "required": ["description"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "execute_ui_action",
+                    "description": "Execute a UI action on the user's screen. Always open a new tab before navigating anywhere.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action_type": {
+                                "type": "string",
+                                "enum": ["click", "type", "hotkey", "navigate", "scroll"],
+                                "description": "Type of action to perform"
+                            },
+                            "target": {"type": "string", "description": "Target element or URL"},
+                            "value": {"type": "string", "description": "Text to type (only for type and find_and_type actions)"}
+                        },
+                        "required": ["action_type", "target"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "recall_context",
+                    "description": "Recall relevant past context from this session.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "What to recall"}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            }
+        ]
 
-        from google.adk.tools import FunctionTool
-
-        async def analyze_screen(description: str) -> dict:
-            """Analyze the current screen and extract actionable information."""
-            return await self.vision_agent.analyze_current_screen(description)
-
-        async def generate_creative_brief(prompt: str, context: str) -> dict:
-            """Generate a multimodal creative brief with text, image prompts, and actions."""
-            return await self.creative_agent.generate_brief(prompt, context)
-
-        async def execute_ui_action(action_type: str, target: str, value: str = "") -> dict:
-            """
-            Execute a UI action on the user's screen using desktop automation.
-
-            action_type options:
-            - click: click at coordinates or named position e.g. "960,540" or "search bar"
-            - type: type text into the currently focused element (set value=text to type)
-            - find_and_click: find UI element by description and click it
-            - find_and_type: find element by description, click it, then type value into it
-            - hotkey: press keyboard shortcut e.g. target="ctrl+t" for new tab
-            - navigate: open a URL in the browser e.g. target="https://gemini.google.com"
-            - scroll: scroll at a position
-            - screenshot: take a screenshot
-
-            Examples:
-            - Open Gemini: action_type="navigate", target="https://gemini.google.com"
-            - Click chat input: action_type="find_and_click", target="chat input box"
-            - Type message: action_type="type", value="What is the weather today?"
-            - Send message: action_type="hotkey", target="enter"
-            - Do it all at once: action_type="find_and_type", target="chat input", value="Hello Gemini"
-            """
-            result = await desktop.execute(action_type, target, value)
-            # Also notify frontend of the action taken
-            await self._send({
-                "type": "action_executed",
-                "action_type": action_type,
-                "target": target,
-                "value": value,
-                "result": result,
-            })
-            return result
-
-        async def speak_to_user(message: str, emotion: str = "neutral") -> dict:
-            """Send a spoken response to the user."""
-            return await self.voice_agent.speak(message, emotion)
-
-        async def recall_context(query: str) -> dict:
-            """Recall relevant past context from this session."""
-            return await self.memory.recall(query)
-
-        return Agent(
-            name="PRISM",
-            model="gemini-2.5-flash",
-            description=(
-                "PRISM is an ambient intelligence agent. It sees the user's screen, "
-                "hears their voice, creates rich multimedia content, and takes actions "
-                "on their behalf. It operates in a continuous loop: SEE → UNDERSTAND → CREATE → ACT."
-            ),
-            instruction="""
-You are PRISM, an ambient AI agent. You have four superpowers:
-
-1. HEAR: You listen to the user in real-time and understand their intent.
-2. SEE: You can see the user's screen — their open apps, browser tabs, documents.
-3. CREATE: You generate rich interleaved output — narration, images, plans.
-4. ACT: You control the user's screen directly using desktop automation.
-
-When the user asks you to interact with something on screen:
-- First use analyze_screen to understand what is visible
-- Then use execute_ui_action to perform the action
-
-Common action patterns:
-- "Open Google Gemini" → execute_ui_action(action_type="navigate", target="https://gemini.google.com")
-- "Type X in the chat" → execute_ui_action(action_type="find_and_type", target="chat input", value="X")
-- "Press Enter" → execute_ui_action(action_type="hotkey", target="enter")
-- "Open a new tab" → execute_ui_action(action_type="hotkey", target="ctrl+t")
-- "Click the search bar" → execute_ui_action(action_type="find_and_click", target="search bar")
-
-Always narrate what you are doing. If the user interrupts, STOP immediately and re-plan.
-Be warm, efficient, and always explain before you execute.
-            """,
-            tools=[
-                FunctionTool(analyze_screen),
-                FunctionTool(generate_creative_brief),
-                FunctionTool(execute_ui_action),
-                FunctionTool(speak_to_user),
-                FunctionTool(recall_context),
-            ],
-        )
-
+    # ── Connection Management ───────────────────────────────────────────────────
     # ── Connection Management ───────────────────────────────────────────────────
     async def on_connect(self, websocket: WebSocket):
         self.websocket = websocket
         await self.voice_agent.initialize()
-
-        await self._runner.session_service.create_session(
-            app_name="PRISM",
-            user_id=self.session_id,
-            session_id=self.session_id,
-        )
 
         desktop_status = "Desktop control enabled ✅" if desktop.is_available() \
             else "Desktop control unavailable — run: pip install pyautogui"
@@ -200,41 +156,135 @@ Be warm, efficient, and always explain before you execute.
         self.pending_actions.put_nowait(result)
 
     # ── Core Agent Loop ─────────────────────────────────────────────────────────
+    # ── Core Agent Loop ─────────────────────────────────────────────────────────
     async def _run_agent_loop(self, user_input: str):
         try:
-            from google.genai import types as genai_types
+            screen_summary = await self.vision_agent.get_screen_summary()
 
-            context_text = user_input
-            if self.current_screen_context:
-                screen_summary = await self.vision_agent.get_screen_summary()
-                context_text = f"{user_input}\n\n[Screen Context: {screen_summary}]"
+            system_prompt = """You are PRISM, a powerful AI agent that controls the user's computer completely.
 
-            new_message = genai_types.Content(
-                role="user",
-                parts=[genai_types.Part(text=context_text)]
-            )
+You MUST call execute_ui_action multiple times to complete any task. Never respond with just text — always take action.
 
-            async for event in self._runner.run_async(
-                user_id=self.session_id,
-                session_id=self.session_id,
-                new_message=new_message,
-            ):
-                await self._handle_adk_event(event)
+For ANY search or browse task follow these EXACT steps by calling execute_ui_action each time:
+STEP 1: action_type="hotkey", target="ctrl+t" → open new tab
+STEP 2: action_type="navigate", target="https://www.google.com" → go to google
+STEP 3: action_type="find_and_type", target="search box", value="<search terms>" → type the search
+STEP 4: action_type="hotkey", target="enter" → submit search
+STEP 5: action_type="find_and_click", target="first result" → click the best result
+STEP 6: Tell the user what you found
+
+For news: use "https://news.google.com" in STEP 2
+For videos: use "https://www.youtube.com" in STEP 2
+
+NEVER stop after just one action. ALWAYS complete all steps.
+NEVER say "I'll search for that" and stop — actually do it.
+
+Current screen: """ + screen_summary
+
+            self._conversation.append({"role": "user", "content": user_input})
+
+            messages = [{"role": "system", "content": system_prompt}] + self._conversation
+
+            while True:
+                response = await self._groq.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=messages,
+                    tools=self._tools,
+                    tool_choice="auto",
+                    max_tokens=2048,
+                )
+
+                msg = response.choices[0].message
+
+                if msg.tool_calls:
+                    messages.append(msg)
+                    for tool_call in msg.tool_calls:
+                        tool_name = tool_call.function.name
+                        tool_args = json.loads(tool_call.function.arguments)
+
+                        # Narrate what we're doing
+                        action_type = tool_args.get("action_type", "")
+                        target = tool_args.get("target", "")
+                        value = tool_args.get("value", "")
+                        narration = self._narrate_action(action_type, target, value)
+                        if narration:
+                            await self._send({"type": "voice_response", "text": narration})
+
+                        result = await self._execute_tool(tool_name, tool_args)
+
+                        # Wait for page to load after navigation
+                        if action_type in ["navigate", "hotkey"] and target in ["enter", "ctrl+t"]:
+                            import asyncio
+                            await asyncio.sleep(2)
+
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps(result),
+                        })
+                else:
+                    final_text = msg.content
+                    if final_text:
+                        self._conversation.append({"role": "assistant", "content": final_text})
+                        await self._send({"type": "voice_response", "text": final_text})
+                        await self.memory.add_assistant_message(final_text)
+                    break
 
         except Exception as e:
             logger.error(f"Agent loop error: {e}", exc_info=True)
             await self._send({"type": "error", "message": f"Agent error: {str(e)}"})
 
-    async def _handle_adk_event(self, event):
-        if hasattr(event, "is_final_response") and not event.is_final_response():
-            return
-        if hasattr(event, "content") and event.content:
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    await self._send({"type": "voice_response", "text": part.text})
-                    await self.memory.add_assistant_message(part.text)
+    async def _execute_tool(self, name: str, args: dict) -> dict:
+        """Execute a tool call from Groq."""
+        try:
+            if name == "analyze_screen":
+                return await self.vision_agent.analyze_current_screen(args.get("description", ""))
+
+            elif name == "execute_ui_action":
+                action_type = args.get("action_type")
+                target = args.get("target", "")
+                value = args.get("value") or ""
+
+                # Always open new tab before navigating
+                if action_type == "navigate":
+                    await desktop.execute("hotkey", "ctrl+t")
+                    import asyncio
+                    await asyncio.sleep(0.5)
+
+                result = await desktop.execute(action_type, target, value)
+                await self._send({
+                    "type": "action_executed",
+                    "action_type": action_type,
+                    "target": target,
+                    "value": value,
+                    "result": result,
+                })
+                return result
+
+            elif name == "recall_context":
+                return await self.memory.recall(args.get("query", ""))
+
+            return {"error": f"Unknown tool: {name}"}
+
+        except Exception as e:
+            logger.error(f"Tool execution error: {e}")
+            return {"error": str(e)}
 
     # ── Action Dispatcher (browser-side fallback) ───────────────────────────────
+    def _narrate_action(self, action_type: str, target: str, value: str) -> str | None:
+        """Generate a narration for each action so user knows what's happening."""
+        if action_type == "hotkey" and target == "ctrl+t":
+            return "Opening a new tab..."
+        if action_type == "navigate":
+            return f"Navigating to {target}..."
+        if action_type == "find_and_type":
+            return f"Searching for {value}..."
+        if action_type == "hotkey" and target == "enter":
+            return "Searching..."
+        if action_type == "find_and_click":
+            return "Opening the best result..."
+        return None
+
     async def _dispatch_action(self, action_type: str, target: str, value: str = "") -> dict:
         """Fallback browser-side action dispatcher via WebSocket."""
         if not self.action_socket:
