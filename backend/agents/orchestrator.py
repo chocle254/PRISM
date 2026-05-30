@@ -55,20 +55,6 @@ class PRISMOrchestrator:
             {
                 "type": "function",
                 "function": {
-                    "name": "analyze_screen",
-                    "description": "Analyze the current screen and extract actionable information.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "description": {"type": "string", "description": "What to look for on screen"}
-                        },
-                        "required": ["description"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "execute_ui_action",
                     "description": "Execute a UI action on the user's screen. Always open a new tab before navigating anywhere.",
                     "parameters": {
@@ -76,7 +62,7 @@ class PRISMOrchestrator:
                         "properties": {
                             "action_type": {
                                 "type": "string",
-                                "enum": ["click", "type", "hotkey", "navigate", "scroll"],
+                                "enum": ["click", "type", "hotkey", "navigate", "scroll", "find_and_click", "find_and_type"],
                                 "description": "Type of action to perform"
                             },
                             "target": {"type": "string", "description": "Target element or URL"},
@@ -245,11 +231,8 @@ Current screen: """ + screen_summary
                 target = args.get("target", "")
                 value = args.get("value") or ""
 
-                # Always open new tab before navigating
-                if action_type == "navigate":
-                    await desktop.execute("hotkey", "ctrl+t")
-                    import asyncio
-                    await asyncio.sleep(0.5)
+                # Small delay before each action
+                await asyncio.sleep(0.3)
 
                 result = await desktop.execute(action_type, target, value)
                 await self._send({
